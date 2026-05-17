@@ -151,6 +151,7 @@ export async function gradeSubmissionWithAI(
     totalScore: 100,
     studentName: submission.student_name,
     studentNote: submission.note,
+    imageCount: imageUrls.length,
     ocrTranscript,
   })
 
