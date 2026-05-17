@@ -16,7 +16,7 @@
 
 import { ocr } from "tencentcloud-sdk-nodejs-ocr"
 import { imageSize } from "image-size"
-import { get } from "@vercel/blob"
+import { head } from "@vercel/blob"
 
 const OcrClient = ocr.v20181119.Client
 
@@ -83,7 +83,7 @@ function clampPct(v: number, min = 0, max = 100): number {
 /**
  * 抓图字节 — 用于解析像素尺寸 + 转 base64。
  * 兼容两种输入：
- *  - 私有 Blob pathname（项目里的常规情况）：走 @vercel/blob get()
+ *  - Blob pathname（项目里的常规情况）：走 head() 拿真实 url 后 fetch
  *  - 公网 HTTPS URL（历史数据或外部链接）：直接 fetch
  */
 async function fetchImageBuffer(pathnameOrUrl: string): Promise<Buffer> {
@@ -93,25 +93,13 @@ async function fetchImageBuffer(pathnameOrUrl: string): Promise<Buffer> {
     return Buffer.from(await res.arrayBuffer())
   }
 
-  const result = await get(pathnameOrUrl, { access: "private" })
-  if (!result || !result.stream) {
+  const meta = await head(pathnameOrUrl)
+  if (!meta?.url) {
     throw new Error(`blob not found: ${pathnameOrUrl}`)
   }
-  const chunks: Uint8Array[] = []
-  const reader = result.stream.getReader()
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value) chunks.push(value)
-  }
-  const totalLen = chunks.reduce((sum, c) => sum + c.byteLength, 0)
-  const buf = Buffer.alloc(totalLen)
-  let off = 0
-  for (const c of chunks) {
-    buf.set(c, off)
-    off += c.byteLength
-  }
-  return buf
+  const res = await fetch(meta.url)
+  if (!res.ok) throw new Error(`fetch blob failed: ${res.status}`)
+  return Buffer.from(await res.arrayBuffer())
 }
 
 /* ----------------------------- 单页 OCR ----------------------------- */

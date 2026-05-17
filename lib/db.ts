@@ -114,16 +114,25 @@ export async function getActiveTask(id: string): Promise<Task | null> {
  * - 可通过 restoreTask 一键恢复
  */
 export async function softDeleteTask(taskId: string, teacherId: string): Promise<Task> {
+  // 先做幂等检查：如果任务已被删过，直接返回当前状态（前端 UI 也会被刷新）
+  const { data: existing } = await supabase()
+    .from("tasks")
+    .select("*")
+    .eq("id", taskId)
+    .eq("teacher_id", teacherId)
+    .maybeSingle()
+  if (!existing) throw new Error("任务不存在或无权限删除")
+  if (existing.deleted_at) return existing as Task
+
   const { data, error } = await supabase()
     .from("tasks")
     .update({ deleted_at: new Date().toISOString() })
     .eq("id", taskId)
-    .eq("teacher_id", teacherId) // 防越权：只能删自己的任务
-    .is("deleted_at", null) // 已删除的不再重复操作
+    .eq("teacher_id", teacherId)
     .select()
-    .single()
+    .maybeSingle()
   if (error) throw error
-  if (!data) throw new Error("任务不存在或无权限删除")
+  if (!data) throw new Error("删除失败，请重试")
   return data as Task
 }
 
@@ -147,12 +156,21 @@ export async function createTask(
     status?: Task["status"]
   },
 ): Promise<Task> {
+  // 防御：剔除 null / undefined / 空串，避免脏数据进入 class_ids 数组
+  const cleanClassIds = (task.class_ids ?? []).filter(
+    (id): id is string => typeof id === "string" && id.length > 0,
+  )
+  if (cleanClassIds.length === 0) {
+    throw new Error("至少需要选择 1 个有效班级")
+  }
+  task = { ...task, class_ids: cleanClassIds }
+
   // Calculate target_student_count
   const { data: students } = await supabase()
     .from("app_users")
     .select("id")
     .eq("role", "student")
-    .in("class_id", task.class_ids)
+    .in("class_id", cleanClassIds)
   const targetCount = students?.length ?? 0
 
   const { data, error } = await supabase()
