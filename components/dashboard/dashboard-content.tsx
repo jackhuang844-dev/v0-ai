@@ -171,7 +171,7 @@ export function DashboardContent() {
 
       <KpiCards data={kpi} />
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
+      <div className="grid gap-6 lg:grid-cols-[1fr_360px]" id="recent-tasks">
         <TaskTable rows={taskRows} teacherName={user.name} teacherId={user.id} />
         <Card className="self-start">
           <CardHeader className="pb-3">

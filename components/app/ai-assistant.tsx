@@ -6,7 +6,6 @@ import { DefaultChatTransport, type UIMessage } from "ai"
 import { Sparkles, X, Send, Loader2, BookOpen, Check } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -84,6 +83,13 @@ export function AIAssistant() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" })
   }, [messages])
+
+  // 让侧边栏 / 其他位置可以一键打开对话框
+  useEffect(() => {
+    const onOpen = () => setOpen(true)
+    window.addEventListener("open-ai-assistant", onOpen as EventListener)
+    return () => window.removeEventListener("open-ai-assistant", onOpen as EventListener)
+  }, [])
 
   if (!user || user.role !== "teacher") return null
 
@@ -203,9 +209,10 @@ export function AIAssistant() {
             </DropdownMenu>
           </div>
 
-          {/* 对话区 */}
-          <ScrollArea className="flex-1">
-            <div ref={scrollRef} className="px-4 py-4 space-y-3">
+          {/* 对话区 — 原生 overflow-y-auto 让 scrollRef 能直接控制滚动；
+              ScrollArea 在动态追加流式消息时会出现自动滚屏失效（实际滚动容器是 Radix 注入的 viewport），所以这里改成原生方案。 */}
+          <div ref={scrollRef} className="flex-1 overflow-y-auto overscroll-contain">
+            <div className="px-4 py-4 space-y-3">
               {messages.length === 0 ? (
                 <div className="space-y-3">
                   <p className="text-sm text-muted-foreground">
@@ -267,7 +274,7 @@ export function AIAssistant() {
                 )
               })}
             </div>
-          </ScrollArea>
+          </div>
 
           {/* 输入区 */}
           <div className="border-t p-3 flex gap-2 items-end">

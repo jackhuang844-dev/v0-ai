@@ -6,7 +6,6 @@ import {
   LayoutDashboard,
   ClipboardList,
   Sparkles,
-  Smartphone,
   GraduationCap,
 } from "lucide-react"
 import { cn } from "@/lib/utils"
@@ -15,16 +14,27 @@ type NavItem = {
   label: string
   href: string
   icon: typeof LayoutDashboard
-  disabled?: boolean
 }
 
 const mainNav: NavItem[] = [
   { label: "学情看板", href: "/dashboard", icon: LayoutDashboard },
-  { label: "学生端预览", href: "/student", icon: Smartphone },
 ]
 
 export function AppSidebar() {
   const pathname = usePathname()
+
+  function handleOpenAssistant() {
+    if (typeof window === "undefined") return
+    window.dispatchEvent(new CustomEvent("open-ai-assistant"))
+  }
+
+  function handleScrollToTasks(e: React.MouseEvent<HTMLAnchorElement>) {
+    if (typeof window === "undefined") return
+    if (pathname !== "/dashboard") return // 让 Link 自然导航过去
+    e.preventDefault()
+    const el = document.getElementById("recent-tasks")
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
 
   return (
     <aside className="hidden lg:flex lg:flex-col w-60 shrink-0 border-r border-sidebar-border bg-sidebar">
@@ -72,35 +82,27 @@ export function AppSidebar() {
         </ul>
 
         <div className="mt-6 px-2 mb-2 text-[11px] font-medium text-muted-foreground uppercase tracking-wider">
-          快捷入口
+          快捷操作
         </div>
         <ul className="flex flex-col gap-0.5">
           <li>
-            <Link
-              href="/dashboard"
-              className={cn(
-                "flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors",
-                pathname.startsWith("/dashboard/grading")
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                  : "text-sidebar-foreground hover:bg-sidebar-accent/60",
-              )}
+            <button
+              type="button"
+              onClick={handleOpenAssistant}
+              className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors text-sidebar-foreground hover:bg-sidebar-accent/60 text-left"
             >
-              <Sparkles className="w-4 h-4 shrink-0" />
-              <span className="truncate">AI 批阅工作台</span>
-            </Link>
+              <Sparkles className="w-4 h-4 shrink-0 text-primary" />
+              <span className="truncate">打开 AI 助教</span>
+            </button>
           </li>
           <li>
             <Link
-              href="/dashboard"
-              className={cn(
-                "flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors",
-                pathname.startsWith("/dashboard/tasks")
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground font-medium"
-                  : "text-sidebar-foreground hover:bg-sidebar-accent/60",
-              )}
+              href="/dashboard#recent-tasks"
+              onClick={handleScrollToTasks}
+              className="flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors text-sidebar-foreground hover:bg-sidebar-accent/60"
             >
               <ClipboardList className="w-4 h-4 shrink-0" />
-              <span className="truncate">作业进度跟踪</span>
+              <span className="truncate">跳到作业列表</span>
             </Link>
           </li>
         </ul>
