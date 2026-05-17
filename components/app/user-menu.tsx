@@ -17,12 +17,12 @@ import {
 import { useAuth } from "@/components/auth/auth-provider"
 
 export function UserMenu() {
-  const { user, logout } = useAuth()
+  const { user, logout, switchAccount } = useAuth()
   const { theme, setTheme } = useTheme()
   if (!user) return null
   const sub =
     user.role === "teacher"
-      ? "数学组 · 教师"
+      ? `${user.subject ?? "学科"} · 教师`
       : `学号 ${user.student_no ?? "—"}`
 
   return (
@@ -81,7 +81,7 @@ export function UserMenu() {
             </DropdownMenuItem>
           </DropdownMenuSubContent>
         </DropdownMenuSub>
-        <DropdownMenuItem onClick={logout}>
+        <DropdownMenuItem onClick={switchAccount}>
           <RefreshCw className="w-3.5 h-3.5" />
           切换账号
         </DropdownMenuItem>
