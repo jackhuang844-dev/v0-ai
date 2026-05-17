@@ -1,57 +1,48 @@
 import "server-only"
 import { cookies } from "next/headers"
-import {
-  TEACHER_COOKIE_NAME,
-  STUDENT_COOKIE_NAME,
-  LEGACY_COOKIE_NAME,
-  deserializeUser,
-} from "./auth"
+import { SESSION_COOKIE, LEGACY_COOKIE_NAMES, deserializeUser } from "./auth"
 import type { AppUser } from "./types"
 
 /**
  * 服务端读取登录用户。
  *
- * 角色独立 Cookie 后，同一浏览器可能同时存在 teacher 和 student 两个会话。
- * 调用方按需选择：
- *   - getCurrentTeacher() / getCurrentStudent()：明确读哪一种身份
- *   - getCurrentUser(prefer)：让调用方提示偏好；找不到对应角色时回落到另一个
- *
- * 历史兼容：旧版本写入的 `sewise_session_user` cookie 也会被识别，按其内部 role 字段归类。
+ * 单 cookie 设计：一个浏览器只允许一个会话。`getCurrentUser(prefer)` 仅在 prefer 与
+ * 当前 session 角色不匹配时返回 null —— 这样老师页/学生页能各自精准卡住自己的角色，
+ * 防止"老师页面突然变学生"的串台问题。
  */
 
-async function readCookie(name: string): Promise<AppUser | null> {
+async function readSession(): Promise<AppUser | null> {
   const store = await cookies()
-  return deserializeUser(store.get(name)?.value)
+  // 优先读新 cookie；旧 cookie 仅在老用户尚未重新登录时兜底
+  const fresh = deserializeUser(store.get(SESSION_COOKIE)?.value)
+  if (fresh) return fresh
+  for (const legacy of LEGACY_COOKIE_NAMES) {
+    const u = deserializeUser(store.get(legacy)?.value)
+    if (u) return u
+  }
+  return null
 }
 
 export async function getCurrentTeacher(): Promise<AppUser | null> {
-  const t = await readCookie(TEACHER_COOKIE_NAME)
-  if (t && t.role === "teacher") return t
-  // 兼容旧 cookie
-  const legacy = await readCookie(LEGACY_COOKIE_NAME)
-  if (legacy && legacy.role === "teacher") return legacy
-  return null
+  const u = await readSession()
+  return u && u.role === "teacher" ? u : null
 }
 
 export async function getCurrentStudent(): Promise<AppUser | null> {
-  const s = await readCookie(STUDENT_COOKIE_NAME)
-  if (s && s.role === "student") return s
-  const legacy = await readCookie(LEGACY_COOKIE_NAME)
-  if (legacy && legacy.role === "student") return legacy
-  return null
+  const u = await readSession()
+  return u && u.role === "student" ? u : null
 }
 
 /**
- * 偏好语义：preferRole 决定优先返回哪种身份；找不到才回落另一种。
- * - `prefer = "teacher"` —— 在老师页面用，例如 /dashboard
- * - `prefer = "student"` —— 在学生页面用，例如 /student
- * - 不传 —— 任意一个都行（例如全局 layout）
+ * `prefer` 在单 session 模式下变成"严格筛选"：
+ *   - 不传 → 返回当前 session 用户（任意角色）
+ *   - 传 → 仅当 session 角色匹配时返回，否则返回 null
  */
 export async function getCurrentUser(
   prefer?: "teacher" | "student",
 ): Promise<AppUser | null> {
-  if (prefer === "teacher") return (await getCurrentTeacher()) ?? (await getCurrentStudent())
-  if (prefer === "student") return (await getCurrentStudent()) ?? (await getCurrentTeacher())
-  // 默认顺序：teacher cookie 优先（与历史行为一致）
-  return (await getCurrentTeacher()) ?? (await getCurrentStudent())
+  const u = await readSession()
+  if (!u) return null
+  if (prefer && u.role !== prefer) return null
+  return u
 }

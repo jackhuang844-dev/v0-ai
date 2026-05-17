@@ -1,39 +1,28 @@
 "use client"
 
 import { createContext, useContext, useState, useCallback } from "react"
-import {
-  TEACHER_COOKIE_NAME,
-  STUDENT_COOKIE_NAME,
-  AUTH_STORAGE_KEY,
-  cookieNameForRole,
-  serializeUser,
-  type Role,
-} from "@/lib/auth"
+import { SESSION_COOKIE, LEGACY_COOKIE_NAMES, AUTH_STORAGE_KEY, type Role } from "@/lib/auth"
 import type { AppUser } from "@/lib/types"
 
 interface AuthContextValue {
   user: AppUser | null
-  /** 上下文角色：当前页面（dashboard / student）的角色锁定，影响 logout 清哪一个 cookie */
+  /** 当前页面 layout 锁定的角色（仅用于 UI 判断；权威是 cookie）。 */
   role: Role
   loading: boolean
-  /** 写入指定角色的 cookie + localStorage */
-  login: (user: AppUser) => void
-  /** 仅清除当前角色的 cookie；另一端的会话保留 */
-  logout: () => void
-  /** 切换账号：清空当前角色 cookie 后跳到 /login?switch=1&role=... */
-  switchAccount: () => void
+  /** 客户端 logout：调 /api/auth/logout 让服务端清 cookie，再跳 /login。 */
+  logout: () => Promise<void>
+  /** 切换账号：等价于 logout，但跳转到 /login?switch=1。 */
+  switchAccount: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | undefined>(undefined)
 
-const COOKIE_MAX_AGE = 60 * 60 * 24 * 30 // 30 天
-
-function writeCookie(name: string, value: string) {
-  document.cookie = `${name}=${value}; path=/; max-age=${COOKIE_MAX_AGE}; SameSite=Lax`
-}
-function clearCookie(name: string) {
-  document.cookie = `${name}=; path=/; max-age=0; SameSite=Lax`
-  document.cookie = `${name}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax`
+function clearClientCookies() {
+  if (typeof document === "undefined") return
+  for (const name of [SESSION_COOKIE, ...LEGACY_COOKIE_NAMES]) {
+    document.cookie = `${name}=; path=/; max-age=0; SameSite=Lax`
+    document.cookie = `${name}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT; SameSite=Lax`
+  }
 }
 
 export function AuthProvider({
@@ -46,48 +35,39 @@ export function AuthProvider({
    * 当前页面所属的角色作用域：
    * - dashboard layout 传 "teacher"
    * - student layout 传 "student"
-   * - 旧调用未传时，保守按 initialUser.role 推导，再退化为 "teacher"
    */
   role?: Role
   children: React.ReactNode
 }) {
   const resolvedRole: Role = role ?? initialUser?.role ?? "teacher"
-  const [user, setUser] = useState<AppUser | null>(initialUser)
-  const [loading] = useState(false)
+  const [user] = useState<AppUser | null>(initialUser)
 
-  const login = useCallback(
-    (u: AppUser) => {
-      setUser(u)
-      if (typeof window !== "undefined") {
-        localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(u))
-        // 写到该用户真实 role 对应的 cookie，而不是当前页面 role
-        writeCookie(cookieNameForRole(u.role), serializeUser(u))
-      }
-    },
-    [],
-  )
-
-  const logout = useCallback(() => {
-    setUser(null)
+  const logout = useCallback(async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" })
+    } catch {
+      // ignore network errors — 客户端清掉 cookie + localStorage 也能登出
+    }
     if (typeof window !== "undefined") {
       localStorage.removeItem(AUTH_STORAGE_KEY)
-      // 仅清当前 scope 的 cookie，另一端会话保留
-      clearCookie(cookieNameForRole(resolvedRole))
-      // 兼容老单 cookie，一并清掉
-      clearCookie("sewise_session_user")
+      clearClientCookies()
       window.location.href = "/login"
     }
-  }, [resolvedRole])
+  }, [])
 
-  const switchAccount = useCallback(() => {
+  const switchAccount = useCallback(async () => {
+    try {
+      await fetch("/api/auth/logout", { method: "POST" })
+    } catch {}
     if (typeof window !== "undefined") {
-      clearCookie(cookieNameForRole(resolvedRole))
-      window.location.href = `/login?switch=1&role=${resolvedRole}`
+      localStorage.removeItem(AUTH_STORAGE_KEY)
+      clearClientCookies()
+      window.location.href = `/login?switch=1`
     }
-  }, [resolvedRole])
+  }, [])
 
   return (
-    <AuthContext.Provider value={{ user, role: resolvedRole, loading, login, logout, switchAccount }}>
+    <AuthContext.Provider value={{ user, role: resolvedRole, loading: false, logout, switchAccount }}>
       {children}
     </AuthContext.Provider>
   )
@@ -98,6 +78,3 @@ export function useAuth() {
   if (!ctx) throw new Error("useAuth must be used inside AuthProvider")
   return ctx
 }
-
-// 让别处 import 的常量可继续从这里取（保持兼容）
-export { TEACHER_COOKIE_NAME, STUDENT_COOKIE_NAME }

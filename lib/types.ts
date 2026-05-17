@@ -4,6 +4,8 @@ export interface AppUser {
   id: string
   name: string
   role: UserRole
+  /** 学科：仅老师有意义（"数学" / "英语"…），学生为 null。 */
+  subject?: string | null
   class_id: string | null
   student_no: string | null
   avatar_color: string

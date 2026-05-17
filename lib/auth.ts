@@ -1,38 +1,27 @@
 import type { AppUser } from "./types"
 
 /**
- * 角色独立 Cookie：老师与学生各占一个 cookie，
- * 同一浏览器可同时登录两种身份用于演示联动。
+ * 强制单会话：一个浏览器只允许登录一个账号。
  *
- * - `sewise_session_teacher`：老师身份会话
- * - `sewise_session_student`：学生身份会话
- *
- * 兼容历史：`sewise_session_user` 是旧版单 cookie，仍读但不再写入。
+ * 历史上为了"老师/学生在同一浏览器并存演示"用过双 cookie（teacher/student 各一），
+ * 但路由切换瞬间会出现读到另一边 cookie → 老师页面突然变成学生（或反之）。
+ * 现在统一回归单 cookie，多端测试时请用两个浏览器/无痕窗口。
  */
-export const TEACHER_COOKIE_NAME = "sewise_session_teacher"
-export const STUDENT_COOKIE_NAME = "sewise_session_student"
-export const LEGACY_COOKIE_NAME = "sewise_session_user"
+export const SESSION_COOKIE = "sewise_session"
 
-/** 老的导出名保留作为别名，现有少量服务端引用还在用它 → 解读时按"两个都试"。 */
-export const AUTH_COOKIE_NAME = TEACHER_COOKIE_NAME
+/** 历史 cookie 名，登录时一并清掉，避免老 cookie 干扰服务端读取。 */
+export const LEGACY_COOKIE_NAMES = [
+  "sewise_session_user",
+  "sewise_session_teacher",
+  "sewise_session_student",
+] as const
 
+/** 客户端镜像（仅做即时 hydrate；权威来源是 cookie）。 */
 export const AUTH_STORAGE_KEY = "sewise_current_user"
 
 export type Role = "teacher" | "student"
 
-export function cookieNameForRole(role: Role): string {
-  return role === "teacher" ? TEACHER_COOKIE_NAME : STUDENT_COOKIE_NAME
-}
-
-/**
- * Demo-mode auth: we don't use Supabase Auth because the user wants
- * one-click password-less login with predefined accounts.
- * Sessions live in role-scoped cookies (server read) + localStorage (client read).
- *
- * This file is import-safe in both client and server components.
- * For server-only `getCurrentUser()` / `getCurrentTeacher()` / `getCurrentStudent()`,
- * import from `lib/auth-server`.
- */
+/* ----------------------------- 序列化 ----------------------------- */
 
 export function serializeUser(user: AppUser): string {
   return encodeURIComponent(JSON.stringify(user))
@@ -41,9 +30,12 @@ export function serializeUser(user: AppUser): string {
 export function deserializeUser(raw: string | undefined | null): AppUser | null {
   if (!raw) return null
   try {
-    return JSON.parse(decodeURIComponent(raw)) as AppUser
+    const parsed = JSON.parse(decodeURIComponent(raw))
+    if (parsed && typeof parsed === "object" && parsed.id && parsed.role) {
+      return parsed as AppUser
+    }
   } catch {
-    return null
+    // ignore
   }
+  return null
 }
-

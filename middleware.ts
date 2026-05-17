@@ -1,82 +1,93 @@
 import { NextResponse, type NextRequest } from "next/server"
-import {
-  TEACHER_COOKIE_NAME,
-  STUDENT_COOKIE_NAME,
-  LEGACY_COOKIE_NAME,
-  deserializeUser,
-} from "@/lib/auth"
+import { SESSION_COOKIE, LEGACY_COOKIE_NAMES, deserializeUser } from "@/lib/auth"
 
-const PUBLIC_PATHS = ["/login"]
+const PUBLIC_PATHS = ["/login", "/api/auth"]
 
 /**
- * 角色独立 Cookie 后的中间件路由策略：
+ * 单 session 路由策略：
  *
- * - /dashboard/**        → 必须有 teacher cookie；否则跳 /login
- * - /student/**          → 必须有 student cookie；否则跳 /login
- * - /                    → 任一身份都可，按"优先 teacher"决定首页
- * - /login               → 已登录任一身份直接进对应首页（除非显式 ?switch=1）
+ * - 当前浏览器只有一个 session（cookie），中间件按 session.role 强制路由：
+ *   - session 是 teacher → 只能进 /dashboard/**；进 /student/** 直接跳 /dashboard
+ *   - session 是 student → 只能进 /student/**；进 /dashboard/** 直接跳 /student
  *
- * 老的单 cookie `sewise_session_user` 仍然被读到（作为兼容），但建议尽快被新写入覆盖。
+ * - /                  → 未登录跳 /login，已登录按 role 跳对应首页
+ * - /login             → 已登录直接跳对应首页（除非 ?switch=1）
+ *
+ * 旧 cookie 仍兼容读取，避免老用户被卡死。
  */
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
 
-  const teacher = deserializeUser(request.cookies.get(TEACHER_COOKIE_NAME)?.value)
-  const student = deserializeUser(request.cookies.get(STUDENT_COOKIE_NAME)?.value)
-  const legacy = deserializeUser(request.cookies.get(LEGACY_COOKIE_NAME)?.value)
-
-  const teacherUser = teacher?.role === "teacher" ? teacher : legacy?.role === "teacher" ? legacy : null
-  const studentUser = student?.role === "student" ? student : legacy?.role === "student" ? legacy : null
-  const anyUser = teacherUser ?? studentUser
+  // 读 session：新 cookie 优先，旧 cookie 兜底
+  let user = deserializeUser(request.cookies.get(SESSION_COOKIE)?.value)
+  if (!user) {
+    for (const legacy of LEGACY_COOKIE_NAMES) {
+      const u = deserializeUser(request.cookies.get(legacy)?.value)
+      if (u) {
+        user = u
+        break
+      }
+    }
+  }
 
   // Root redirect
   if (pathname === "/") {
     const url = request.nextUrl.clone()
-    if (!anyUser) url.pathname = "/login"
-    else if (teacherUser) url.pathname = "/dashboard"
-    else url.pathname = "/student"
+    if (!user) url.pathname = "/login"
+    else url.pathname = user.role === "teacher" ? "/dashboard" : "/student"
     return NextResponse.redirect(url)
   }
 
-  // /login: 已经登录任一身份则跳走（除非显式 ?switch=1 / ?redirect=...）
-  if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
+  // 公共路径：/login + /api/auth/*
+  if (PUBLIC_PATHS.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     const isSwitchIntent =
       request.nextUrl.searchParams.get("switch") === "1" ||
       request.nextUrl.searchParams.has("redirect")
-    if (anyUser && pathname === "/login" && !isSwitchIntent) {
+    if (user && pathname === "/login" && !isSwitchIntent) {
       const url = request.nextUrl.clone()
-      url.pathname = teacherUser ? "/dashboard" : "/student"
+      url.pathname = user.role === "teacher" ? "/dashboard" : "/student"
       return NextResponse.redirect(url)
     }
     return NextResponse.next()
   }
 
-  // /dashboard/** 仅 teacher 通过
+  // 老师区
   if (pathname.startsWith("/dashboard")) {
-    if (!teacherUser) {
+    if (!user) {
       const url = request.nextUrl.clone()
       url.pathname = "/login"
       url.searchParams.set("redirect", pathname)
       url.searchParams.set("role", "teacher")
       return NextResponse.redirect(url)
     }
+    if (user.role !== "teacher") {
+      // 当前 session 是学生 → 强制踢到学生区，避免身份串台
+      const url = request.nextUrl.clone()
+      url.pathname = "/student"
+      return NextResponse.redirect(url)
+    }
     return NextResponse.next()
   }
 
-  // /student/** 仅 student 通过
+  // 学生区
   if (pathname.startsWith("/student")) {
-    if (!studentUser) {
+    if (!user) {
       const url = request.nextUrl.clone()
       url.pathname = "/login"
       url.searchParams.set("redirect", pathname)
       url.searchParams.set("role", "student")
       return NextResponse.redirect(url)
     }
+    if (user.role !== "student") {
+      const url = request.nextUrl.clone()
+      url.pathname = "/dashboard"
+      return NextResponse.redirect(url)
+    }
     return NextResponse.next()
   }
 
-  // 其它受保护路径：任一身份即可
-  if (!anyUser) {
+  // 其它路径需登录
+  if (!user) {
     const url = request.nextUrl.clone()
     url.pathname = "/login"
     url.searchParams.set("redirect", pathname)
