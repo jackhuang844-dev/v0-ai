@@ -47,6 +47,15 @@ const BASE_GROUNDING = `
 - 在 correction_details[i].line_indexes 字段里填入命中的行号数组。例：[3] 表示只命中 L3；[5,6] 表示这条点评跨 L5 和 L6 两行。
 - 同时填 page_index（0-based）。多页时务必正确分页，不要把 第 2 页的 L23 写成 page_index=0。
 
+【多页覆盖原则 · 极其重要】
+- 当学生上传了 N 张图片（N > 1）时，你的 correction_details 必须**逐页覆盖**，不能只批改第 1 页。
+- 具体要求：
+  · 每一张图都至少要产出 2 条批注（除非该页确实是空白页或与作业无关；这种例外必须在 process_analysis 里说明）；
+  · 对每一页都要重新审视：错题、亮点、漏写步骤、不规范书写都要按 page_index 单独定位；
+  · 不允许把后几页的错误"合并"到第 1 页的批注里 — 各页 bbox 各自独立；
+  · 不允许只看第 1 页就给出整体评分 — 你必须先把所有页都看完，再综合给分。
+- 在 user prompt 里我会告诉你本次提交共有几张图，请你按那个数字逐页批注。
+
 【若 OCR 没识别到目标怎么办】
 - 偶尔 OCR 会漏掉某行（手写太潦草、有涂改、有公式图）。这种情况下：
   · 优先把点评附在 OCR 真实存在的"最相近一行"上（line_indexes 仍要给真实存在的行号）。
@@ -62,6 +71,7 @@ const BASE_GROUNDING = `
 【置信度 + 数量】
 - confidence ∈ [0,1]，< 0.55 直接舍弃该条。
 - 普通作业 errors + partials + highlights 合计 5 ~ 15 条，宁少勿滥。
+- 多页作业请按页数线性增加：2 页 → 8~20 条；3 页 → 12~25 条。
 `
 
 const BASE_OUTPUT_CONTRACT = `
@@ -71,6 +81,13 @@ const BASE_OUTPUT_CONTRACT = `
 3. 评语必须具体到题目 / 步骤 / 词句，禁止"继续努力、加油"等空话。
 4. score 与 total_score 必须是整数，且 0 ≤ score ≤ total_score。
 5. weak_points 数组 1~3 项，每项为简短知识点短语，禁止长句。
+
+【teacher_comment 字数预算 · 必须遵守，避免被截断】
+- 总字数严格控制在 500-900 个汉字。绝对不允许超过 900 字 — 否则会被系统截断，导致最后一句没说完。
+- 四段式结构必须完整出现：开头肯定 → "但目前存在 N 个核心问题需要重点突破：" → "建议接下来这样做：" → 鼓励收尾。
+- 每个核心问题展开控制在 80-150 字以内，多余内容应精简，不要因为想写满而把最后一段挤丢。
+- 写完倒数第二段（建议）后，必须再写一句完整的鼓励语作为结尾，且必须以句号或感叹号收束 — 禁止以逗号、半句话、省略号结尾。
+- 模型自检：在输出 teacher_comment 之前，先在心里数一遍：(1) 开头肯定 √ (2) "第一/第二/第三" 都齐 √ (3) "建议接下来这样做：" √ (4) 完整的鼓励收尾句 √ — 四项缺一就回去精简前面内容。
 
 【评分基线（务必遵守，避免分数普遍偏低）】
 - 起评分按"70 分 / 100 分制"思维：学生认真完成主体内容、思路基本正确、虽有局部错误但不影响整体表达时，应给到 70 ~ 79 分。
@@ -157,6 +174,11 @@ export interface BuildGradePromptInput {
   studentName: string
   studentNote?: string | null
   /**
+   * 本次提交的图片张数。会作为强提醒注入 user prompt，
+   * 让模型必须逐页批注（避免只看第 1 张就给 8 个 bbox 的常见 bias）。
+   */
+  imageCount: number
+  /**
    * OCR 转录文本（buildTranscriptForLLM 输出）。
    * 当 OCR 服务可用时，这是模型主要的定位依据 — 模型据此填 line_indexes。
    * 若为空字符串，模型会退化到 fallback bounding_box 路径。
@@ -207,6 +229,19 @@ export function buildGradeUserPrompt(input: BuildGradePromptInput): string {
   lines.push(``, `【学生信息】`, `- 学生姓名：${input.studentName}`)
   if (input.studentNote) {
     lines.push(`- 学生留言：${input.studentNote.replace(/\s+/g, " ").slice(0, 400)}`)
+  }
+
+  /* ---------- 多页提醒：作为 user prompt 里最显眼的一段 ---------- */
+  if (input.imageCount > 1) {
+    lines.push(
+      ``,
+      `【⚠ 本次共上传 ${input.imageCount} 张作业图】`,
+      `请务必逐页批改 — 每一张图都要至少产生 2 条 correction_details（除非该页明显是空白或无关）。`,
+      `每条批注的 page_index 必须设置正确（0 到 ${input.imageCount - 1}）；不要把后几页的错误合并到第 1 页。`,
+      `输出前自检：correction_details 中是否每个 page_index 都至少出现过 2 次？若否，请回去补足。`,
+    )
+  } else {
+    lines.push(``, `【本次共上传 1 张作业图】page_index 全部为 0。`)
   }
 
   if (input.ocrTranscript && input.ocrTranscript.trim().length > 0) {

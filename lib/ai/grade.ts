@@ -1,5 +1,5 @@
 import { generateObject } from "ai"
-import { get } from "@vercel/blob"
+import { head } from "@vercel/blob"
 import type { Submission, Task } from "@/lib/types"
 import {
   buildGradeSystemPrompt,
@@ -18,33 +18,22 @@ import {
 import { autoDeskewSubmissionImages } from "@/lib/image/deskew"
 
 /**
- * 从私有 Blob 拉取图片字节，转成 AI SDK 6 可以直接喂的 data URL。
- * 私有 store 不能让模型直接通过 URL 访问，必须 server 端拿到字节后转 base64。
+ * 从 Blob 拉取图片字节，转成 AI SDK 6 可以直接喂的 data URL。
+ * 即使是 public store，仍然集中走 fetch + base64，这样:
+ *  1) 可以保证图片字节稳定存在再送 LLM（提交后立即批改也不会 race）；
+ *  2) 不暴露 blob 域名到 LLM provider 的访问日志里。
  */
 async function fetchBlobAsDataUrl(pathnameOrUrl: string): Promise<string> {
   // 兼容历史 public URL：直接返回，让 AI SDK 自己抓
   if (/^https?:\/\//i.test(pathnameOrUrl)) return pathnameOrUrl
 
-  const result = await get(pathnameOrUrl, { access: "private" })
-  if (!result || !result.stream) throw new Error(`图片不存在: ${pathnameOrUrl}`)
-
-  // 把 stream 收成 Buffer
-  const chunks: Uint8Array[] = []
-  const reader = result.stream.getReader()
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value) chunks.push(value)
-  }
-  const totalLen = chunks.reduce((sum, c) => sum + c.byteLength, 0)
-  const buf = new Uint8Array(totalLen)
-  let off = 0
-  for (const c of chunks) {
-    buf.set(c, off)
-    off += c.byteLength
-  }
-  const base64 = Buffer.from(buf).toString("base64")
-  const mime = result.blob.contentType || "image/jpeg"
+  const meta = await head(pathnameOrUrl)
+  if (!meta?.url) throw new Error(`图片不存在: ${pathnameOrUrl}`)
+  const res = await fetch(meta.url)
+  if (!res.ok) throw new Error(`图片读取失败: ${res.status}`)
+  const buf = Buffer.from(await res.arrayBuffer())
+  const base64 = buf.toString("base64")
+  const mime = meta.contentType || "image/jpeg"
   return `data:${mime};base64,${base64}`
 }
 
@@ -162,6 +151,7 @@ export async function gradeSubmissionWithAI(
     totalScore: 100,
     studentName: submission.student_name,
     studentNote: submission.note,
+    imageCount: imageUrls.length,
     ocrTranscript,
   })
 

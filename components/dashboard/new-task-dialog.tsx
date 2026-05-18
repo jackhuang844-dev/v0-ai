@@ -43,7 +43,10 @@ export function NewTaskDialog({
   // Form state
   const [title, setTitle] = useState("")
   const [subject, setSubject] = useState("数学")
-  const [classIds, setClassIds] = useState<string[]>([teacher.class_id ?? classes[0]?.id])
+  const [classIds, setClassIds] = useState<string[]>(() => {
+    const initial = teacher.class_id ?? classes[0]?.id
+    return initial ? [initial] : []
+  })
   const [requirements, setRequirements] = useState("")
   const [notes, setNotes] = useState("")
   const [dueDate, setDueDate] = useState(() => {
@@ -75,13 +78,14 @@ export function NewTaskDialog({
     setSubmitting(true)
     try {
       const dueAt = new Date(`${dueDate}T${dueTime}:00`).toISOString()
+      const cleanClassIds = classIds.filter((id): id is string => Boolean(id))
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           title: title.trim(),
           subject,
-          class_ids: classIds,
+          class_ids: cleanClassIds,
           requirements: requirements.trim(),
           notes: notes.trim() || null,
           due_at: dueAt,

@@ -14,7 +14,7 @@
  */
 import "server-only"
 import sharp from "sharp"
-import { put, get } from "@vercel/blob"
+import { put, head } from "@vercel/blob"
 
 /** 低于此角度认为已经基本水平，不做处理。 */
 export const SKEW_THRESHOLD_DEG = 2
@@ -25,23 +25,12 @@ async function fetchBuffer(pathnameOrUrl: string): Promise<Buffer> {
     if (!res.ok) throw new Error(`fetch failed: ${res.status}`)
     return Buffer.from(await res.arrayBuffer())
   }
-  const result = await get(pathnameOrUrl, { access: "private" })
-  if (!result || !result.stream) throw new Error(`blob not found: ${pathnameOrUrl}`)
-  const chunks: Uint8Array[] = []
-  const reader = result.stream.getReader()
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value) chunks.push(value)
-  }
-  const totalLen = chunks.reduce((s, c) => s + c.byteLength, 0)
-  const out = Buffer.alloc(totalLen)
-  let off = 0
-  for (const c of chunks) {
-    out.set(c, off)
-    off += c.byteLength
-  }
-  return out
+  // public store 下用 head() 取真实 url，再 fetch 字节
+  const meta = await head(pathnameOrUrl)
+  if (!meta?.url) throw new Error(`blob not found: ${pathnameOrUrl}`)
+  const res = await fetch(meta.url)
+  if (!res.ok) throw new Error(`fetch blob failed: ${res.status}`)
+  return Buffer.from(await res.arrayBuffer())
 }
 
 /**
@@ -72,12 +61,34 @@ export async function rotateImageBlob(
       : pathnameOrUrl.replace(/\.[a-z]+$/i, "")
     const newPath = `${base}.deskewed-${Math.round(angleDeg)}.jpg`
 
-    const result = await put(newPath, rotated, {
-      access: "private",
-      contentType: "image/jpeg",
-      addRandomSuffix: false,
-      allowOverwrite: true,
-    })
+    // access 自适应：和 app/api/upload/route.ts 同样的策略，
+    // 防止 store 类型与代码不匹配时整个批改链路崩溃。
+    const PRIMARY: "public" | "private" =
+      process.env.BLOB_ACCESS_MODE === "private" ? "private" : "public"
+    const FALLBACK: "public" | "private" = PRIMARY === "public" ? "private" : "public"
+    const isMismatch = (err: any) => {
+      const m = String(err?.message ?? "")
+      return /Cannot use (private|public) access on a (public|private) store/i.test(m)
+    }
+
+    let result
+    try {
+      result = await put(newPath, rotated, {
+        access: PRIMARY,
+        contentType: "image/jpeg",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      })
+    } catch (err: any) {
+      if (!isMismatch(err)) throw err
+      console.warn(`[v0] deskew: access mismatch on ${PRIMARY}, retrying with ${FALLBACK}`)
+      result = await put(newPath, rotated, {
+        access: FALLBACK,
+        contentType: "image/jpeg",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      })
+    }
     return result.pathname
   } catch (e: any) {
     console.error("[v0] deskew rotate failed:", pathnameOrUrl, e?.message)
