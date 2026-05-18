@@ -61,12 +61,34 @@ export async function rotateImageBlob(
       : pathnameOrUrl.replace(/\.[a-z]+$/i, "")
     const newPath = `${base}.deskewed-${Math.round(angleDeg)}.jpg`
 
-    const result = await put(newPath, rotated, {
-      access: "public",
-      contentType: "image/jpeg",
-      addRandomSuffix: false,
-      allowOverwrite: true,
-    })
+    // access 自适应：和 app/api/upload/route.ts 同样的策略，
+    // 防止 store 类型与代码不匹配时整个批改链路崩溃。
+    const PRIMARY: "public" | "private" =
+      process.env.BLOB_ACCESS_MODE === "private" ? "private" : "public"
+    const FALLBACK: "public" | "private" = PRIMARY === "public" ? "private" : "public"
+    const isMismatch = (err: any) => {
+      const m = String(err?.message ?? "")
+      return /Cannot use (private|public) access on a (public|private) store/i.test(m)
+    }
+
+    let result
+    try {
+      result = await put(newPath, rotated, {
+        access: PRIMARY,
+        contentType: "image/jpeg",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      })
+    } catch (err: any) {
+      if (!isMismatch(err)) throw err
+      console.warn(`[v0] deskew: access mismatch on ${PRIMARY}, retrying with ${FALLBACK}`)
+      result = await put(newPath, rotated, {
+        access: FALLBACK,
+        contentType: "image/jpeg",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      })
+    }
     return result.pathname
   } catch (e: any) {
     console.error("[v0] deskew rotate failed:", pathnameOrUrl, e?.message)
